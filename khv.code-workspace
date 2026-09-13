@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"name": "KHV",
+			"path": "."
+		},
+		{
+			"name": "Credentials (cred)",
+			"path": "../cred"
+		}
+	],
+	"settings": {
+		"platformio-ide.autoRebuildAutocompleteCache": true,
+		"markdown-pdf.executablePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+	}
+}
