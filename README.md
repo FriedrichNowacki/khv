@@ -629,19 +629,85 @@ Senden an InfluxDB? = (Δt >= min_interval) AND (|ΔWert| >= Threshold OR Δt >=
 | **Umgebungsklima (I2C)** | AHT20 Raumtemperatur | `0,2` | `10,0` | `120 s` | °C |
 | **Umgebungsklima (I2C)** | AHT20 Luftfeuchtigkeit | `1,0` | `20,0` | `120 s` | % rH |
 | **Umgebungsklima (I2C)** | BMP280 Luftdruck | `0,5` | `20,0` | `120 s` | hPa |
-| **Pumpen 1–4 (VDMA Feedback)** | Leistungsaufnahme (`power_w`) | `0,5` | `20,0` | `60 s` | W |
-| **Pumpen 1–4 (VDMA Feedback)** | Durchflussschätzung (`flow_est_lh`) | `5,0` | `200,0` | `60 s` | l/h |
+| **Pumpen 1–4 (VDMA Feedback)** | Leistungsaufnahme (`power_w`, zeitgew.) | `0,5` | `20,0` | `60 s` | W |
+| **Pumpen 1–4 (VDMA Feedback)** | Elektr. Energie (`pump_energy_wh`, mon.)| `1` | `5.000` | `60 s` | Wh |
+| **Pumpen 1–4 (VDMA Feedback)** | Durchfluss (`flow_est_lh`, zeitgew.) | `5,0` | `200,0` | `60 s` | l/h |
+| **Pumpen 1–4 (VDMA Feedback)** | Umgewälztes Volumen (`virtual_vol_l`, mon.)| `2` | `10.000` | `60 s` | l |
 | **Pumpen 1–4 (VDMA Feedback)** | Feedback-Signalfrequenz | `1,0` | `40,0` | `60 s` | Hz |
-| **Virtuelle WMZ 1–4 (Pumpe & DS18B20)**| Thermische Leistung (`heat_power_w`)| `50` | `20.000` | `60 s` | W |
+| **Virtuelle WMZ 1–4 (Pumpe & DS18B20)**| Thermische Leistung (`heat_power_w`, zeitgew.)| `50` | `20.000` | `60 s` | W |
+| **Virtuelle WMZ 1–4 (Pumpe & DS18B20)**| Wärmemenge (`virtual_energy_wh`, mon.) | `10` | `50.000` | `60 s` | Wh |
 | **Virtuelle WMZ 1–4 (Pumpe & DS18B20)**| Spreizung (`spreading_k`) | `0,2` | `20,0` | `60 s` | K |
-| **Wärmemengenzähler (M-Bus)** | Energie (`energy_wh`) | `500` | `50.000` | `120 s` | Wh |
+| **Wärmemengenzähler (M-Bus)** | Energie (`energy_wh`, Zählerstand) | `500` | `50.000` | `120 s` | Wh |
 | **Wärmemengenzähler (M-Bus)** | Momentanleistung (`power_w`) | `50` | `20.000` | `120 s` | W |
 | **Wärmemengenzähler (M-Bus)** | Volumenstrom (`flow_lh`) | `1` | `20.000` | `120 s` | l/h |
-| **Wärmemengenzähler (M-Bus)** | Kumuliertes Volumen (`volume_l`) | `10` | `50.000` | `120 s` | l |
+| **Wärmemengenzähler (M-Bus)** | Kumuliertes Volumen (`volume_l`, Zählerstand)| `10` | `50.000` | `120 s` | l |
 | **Wärmemengenzähler (M-Bus)** | Vorlauftemperatur (`t_fwd`) | `0,1` | `20,0` | `120 s` | °C |
 | **Wärmemengenzähler (M-Bus)** | Rücklauftemperatur (`t_bwd`) | `0,1` | `20,0` | `120 s` | °C |
 | **Wärmemengenzähler (M-Bus)** | Spreizung (`spreading_k`) | `0,1` | `20,0` | `120 s` | K |
 
+---
+
+### D. Exakte Energie- & Volumen-Bilanzierung bei Flussgrößen (Anti-Integrationsfehler)
+
+Bei Zeitreihendatenbanken wie InfluxDB gilt für Visualisierungen in Grafana oder Berechnungen via Flux/InfluxQL typischerweise die Annahme **„Last Value Holds“ (Zero-Order-Hold, ZOH)**: Ein übertragener Messwert behält seine Gültigkeit, bis der nächste Wert eintrifft.
+
+Werden variable Sendeintervalle (`min_interval = 60s`, Schwellwertfilterung) eingesetzt, führt das unüberlegte Speichern von **reinen Momentanwerten** bei integralen Flussgrößen zu gravierenden Bilanzfehlern:
+
+```text
+Problem bei reinem Momentanwert:
+Leistung P
+  40 W ─────┐ (Pumpe läuft 55s auf 40 W)
+            │
+   5 W      └───► Pumpe schaltet bei Sekunde 56 auf 5 W!
+                  ESP32 sendet bei Sekunde 60 den Momentanwert: "5 W"
+                  ──► InfluxDB multipliziert 5 W * 60 s = 300 Ws (Fehler: über 80% Energie unterschlagen!)
+```
+
+Betroffen sind alle **zeitintegrierten Raten- und Flussgrößen**:
+1. **Thermische Heizleistung ($P_{\text{th}} \to E_{\text{th}}$):** Kumulierte Wärmemenge in Wattstunden (Wh).
+2. **Elektrische Pumpenleistung ($P_{\text{el}} \to E_{\text{el}}$):** Kumulierter Pumpenstrom in Wattstunden (Wh).
+3. **Durchfluss der Pumpe ($Q \to V$):** Kumuliertes umgewälztes Wasservolumen in Litern (l).
+
+#### Die Lösung: Das 2-Säulen-Architekturprinzip des ESP32-C6
+
+Um mathematische Exaktheit für alle Dashboards und Abrechnungen sicherzustellen, setzt der ESP32 auf zwei synchron laufende Säulen:
+
+```text
+Sekündliche Erfassung (1 Hz im FreeRTOS-Task):
+   P_el(t) [W],  Q(t) [l/h],  P_th(t) = Q(t) * ΔT(t) * c [W]
+         │
+         ├───► 1. Säule: Riemann-Integration im RAM (Zeitgewichteter Mittelwert)
+         │        P_bar = (1 / Δt) * ∑ P(t) * dt
+         │        Q_bar = (1 / Δt) * ∑ Q(t) * dt
+         │        ──► Repräsentiert die exakte Fläche unter der Kurve für Momentanwert-Charts!
+         │
+         └───► 2. Säule: Monotone Software-Zähler (Zählerstände im Flash/RAM)
+                  virtual_energy_wh += P_th(t) * (1 / 3600 h)
+                  pump_energy_wh   += P_el(t) * (1 / 3600 h)
+                  virtual_vol_l    += Q(t)    * (1 / 3600 h)
+                  ──► Ermöglicht simple, 100% fehlerfreie Differenzabfragen (Tag/Monat/Jahr)!
+```
+
+#### Säule 1: Zeitgewichteter Mittelwert ($\bar{P}_{\text{el}}, \bar{P}_{\text{th}}, \bar{Q}$)
+Anstelle des letzten Augenblickswerts überträgt der ESP32 für `power_w`, `heat_power_w` und `flow_est_lh` den **zeitgewichteten Durchschnitt** über das vergangene Sendeintervall $\Delta t$:
+$$\bar{P}_{[t_0, t_1]} = \frac{1}{\Delta t} \sum_{i=1}^{N} P(t_i) \cdot \Delta t_i, \quad \bar{Q}_{[t_0, t_1]} = \frac{1}{\Delta t} \sum_{i=1}^{N} Q(t_i) \cdot \Delta t_i$$
+* **Mathematischer Vorteil:** Wenn Grafana oder InfluxDB nun das Integral über diesen Zeitblock bildet ($\bar{P} \cdot \Delta t$ bzw. $\bar{Q} \cdot \Delta t$), entspricht das Ergebnis **auf die Wattsekunde bzw. den Milliliter genau der realen physikalischen Arbeit**, völlig unabhängig davon, wie oft die Leistung im Intervall gesprungen ist.
+
+#### Säule 2: Monotone Software-Akkumulatoren (`virtual_energy_wh`, `virtual_vol_l`, `pump_energy_wh`)
+Genauso wie die geeichten M-Bus-Wärmemengenzähler führt der ESP32 für jeden Heizkreis kontinuierlich hochauflösende Zählerstände (64-Bit Float/Double) im Speicher:
+* `virtual_energy_wh`: Fortlaufende thermische Energie in Wh.
+* `pump_energy_wh`: Fortlaufender Stromverbrauch der Pumpe in Wh.
+* `virtual_vol_l`: Fortlaufendes Wasservolumen in Litern.
+
+* **Vorteil in InfluxDB / Grafana:** Für Monats-, Wochen- oder Tagesberichte muss in InfluxDB kein Integral mehr berechnet werden. Eine simple Differenzabfrage (`max() - min()` oder `nonNegativeDifference()`) liefert selbst bei Paketverlusten oder Netzwerkunterbrechungen das **exakt richtige Ergebnis**.
+
+#### Entscheidender physikalischer Grundsatz: Sekündliche Kreuzmultiplikation
+Für die thermische Wärmeleistung gilt:
+$$P_{\text{th}}(t) = Q(t) \cdot \rho \cdot c_{\text{water}} \cdot (T_{\text{VL}}(t) - T_{\text{RL}}(t))$$
+Da bei Regelvorgängen (Mischer fährt auf/zu, Thermostatventile drosseln) sowohl Durchfluss $Q(t)$ als auch Spreizung $\Delta T(t)$ zeitgleich dynamisch schwanken, gilt in der Regelungstechnik:
+$$\overline{Q \cdot \Delta T} \neq \bar{Q} \cdot \overline{\Delta T}$$
+> [!IMPORTANT]
+> Der ESP32 berechnet das Produkt $P_{\text{th}}(t)$ **strikt sekündlich zeitgleich**, solange die Momentanwerte von $Q$ und $\Delta T$ synchron vorliegen, und integriert erst das resultierende Leistungsprodukt auf. Das nachträgliche Multiplizieren von gemittelten Durchflüssen mit gemittelten Temperaturen in InfluxDB ist unzulässig, da es bei gekoppelten Lastwechseln zu systematischen Messfehlern von bis zu 10–15 % führt.
 
 ---
 
