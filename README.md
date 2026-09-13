@@ -635,6 +635,20 @@ khv/
 1. In VS Code: **Datei -> Arbeitsbereich aus Datei öffnen...** (*File -> Open Workspace from File...*)
 2. [khv.code-workspace](file:///c:/Users/Friedrich%20Nowacki/Documents/PlatformIO/khv/khv.code-workspace) öffnen, um sowohl das Projekt als auch den `cred`-Ordner parallel im Explorer zu verwalten.
 
+### 🐙 Versionsverwaltung (Git & GitHub)
+* **GitHub Repository:** Private Repository unter [`https://github.com/FriedrichNowacki/khv`](https://github.com/FriedrichNowacki/khv)
+* **Branch:** `main`
+* **Sicherheit:** Der Ordner `../cred` liegt außerhalb des Git-Baums – Passwörter und Tokens gelangen niemals in das Repository.
+* **Nützliche Befehle:**
+  * Neuen Stand sichern & pushen:
+    ```bash
+    git add .
+    git commit -m "Beschreibung der Aenderung"
+    git push
+    ```
+  * Ungespeicherte Änderungen verwerfen: `git restore .`
+  * Auf den gesicherten GitHub-Stand zurücksetzen: `git reset --hard origin/main`
+
 
 
 
