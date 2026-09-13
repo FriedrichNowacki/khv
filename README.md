@@ -218,6 +218,43 @@ Die Bilanzierung erfolgt parallel über **zwei unabhängige Quellen**:
    * $\eta \approx 1{,}0$ (100 %): Mischer sind voll geöffnet; Primärwasser strömt ungemischt in die Heizkreise.
    * $\eta \approx 0{,}3$ (30 %): Starke Beimischung; die FBH zirkuliert zu 70 % ihr eigenes Wasser und entzieht dem Kessel nur 30 % Nachspeisung.
 
+#### 3. Heizkreis-spezifische Flussanteile & Beimischungsgrad (Richmannsche Mischungsregel):
+
+An jedem 3-Wege-Mischer treffen zwei Wasserströme zusammen und bilden den gemeinsamen Vorlauf des Heizkreises:
+1. **Heißer Primärzulauf vom Verteilerbalken ($Q_{\text{primär}, i}$)** mit der Temperatur $T_{\text{balken, VL}}$
+2. **Kühler Bypass-Rücklauf aus dem eigenen Kreis ($Q_{\text{bypass}, i}$)** mit der Temperatur $T_{\text{RL}, i}$
+3. **Gemischter Vorlauf in die Heizflächen ($Q_{\text{kreis}, i}$)** mit der Temperatur $T_{\text{VL}, i}$
+
+```text
+                                 T_balken_VL (z.B. 65°C)
+                                        │
+                                        ▼  Q_primär,i (Frischwasser vom Kessel)
+                                  ┌───────────┐
+      Q_bypass,i                  │  3-Wege-  │       Q_kreis,i (Pumpe)
+    (Kreis-Rücklauf) ────────────►│  Mischer  │──────────────────────────► Vorlauf Heizkreis
+    T_RL,i (z.B. 30°C)            └───────────┘                     T_VL,i (z.B. 38°C)
+```
+
+Aus der Massenerhaltung ($Q_{\text{kreis}} = Q_{\text{primär}} + Q_{\text{bypass}}$) und der thermodynamischen Wärmebilanz ($Q_{\text{kreis}} \cdot T_{\text{VL}} = Q_{\text{primär}} \cdot T_{\text{balken, VL}} + Q_{\text{bypass}} \cdot T_{\text{RL}}$) berechnet der ESP32 für jeden Heizkreis $i$ die exakten Flussanteile:
+
+* **Primäranteil $\alpha_i$ (Anteil vom Kesselbalken in %):**
+  $$\alpha_i = \frac{Q_{\text{primär}, i}}{Q_{\text{kreis}, i}} = \frac{T_{\text{VL}, i} - T_{\text{RL}, i}}{T_{\text{balken, VL}} - T_{\text{RL}, i}}$$
+  * $\alpha_i = 1{,}0$ ($100\,\%$): Mischer steht voll AUF ($T_{\text{VL}} = T_{\text{balken, VL}}$).
+  * $\alpha_i = 0{,}0$ ($0\,\%$): Mischer steht voll ZU ($T_{\text{VL}} = T_{\text{RL}}$), reiner Kreis-Umlauf.
+
+* **Bypass-Beimischanteil $\beta_i$ (Rücklauf-Beimischung in %):**
+  $$\beta_i = \frac{Q_{\text{bypass}, i}}{Q_{\text{kreis}, i}} = 1 - \alpha_i = \frac{T_{\text{balken, VL}} - T_{\text{VL}, i}}{T_{\text{balken, VL}} - T_{\text{RL}, i}}$$
+
+* **Absolute Volumenströme (in l/h):**
+  Da der Gesamtförderstrom $Q_{\text{kreis}, i}$ durch das VDMA-Pumpenkennfeld (bzw. den WMZ) bekannt ist:
+  $$Q_{\text{primär}, i} = \alpha_i \cdot Q_{\text{kreis}, i} \quad [\text{l/h}] \quad \text{(Vom Verteilerbalken bezogenes Kesselwasser)}$$
+  $$Q_{\text{bypass}, i} = \beta_i \cdot Q_{\text{kreis}, i} \quad [\text{l/h}] \quad \text{(Über Mischer beigemischtes Rücklaufwasser)}$$
+
+* **Nutzen in der Praxis:**
+  1. **Virtuelle Mischerposition in %:** Da die Stellantriebe keine Stellungsrückmeldung besitzen, liefert $\alpha_i \cdot 100$ in Echtzeit den wahren physikalischen Öffnungsgrad des Mischers!
+  2. **Fehler- und Klemmerkennung:** Fährt der Mischer softwareseitig auf ZU, aber $\alpha_i$ verharrt bei $25\,\%$, meldet der ESP32 eine mechanische Leckage oder Klemmen des Ventilsitzes.
+  3. **Hydraulische Kreuzprüfung:** Die Summe aller Einzel-Primärflüsse entspricht exakt dem Gesamt-Balkendurchfluss: $\sum_{i=1}^{4} Q_{\text{primär}, i} = Q_{\text{balken}}$.
+
 ---
 
 ## 4. M-Bus Wärmemengenzähler (Heatmeter)
@@ -325,10 +362,10 @@ Liefert alle erfassten Messwerte, Aktorzustände und Systemmetriken als kompakte
     { "id": 4, "enabled": false, "pwm": 0,  "feedback_hz": 0.0,  "power_w": 0.0,  "status": "STANDBY", "flow_est_lh": 0 }
   ],
   "circuits": [
-    { "id": 1, "apt": "EG5", "type": "FBH", "t_fwd": 35.2, "t_bwd": 28.4, "spreading_k": 6.8, "flow_lh": 215, "heat_power_w": 1701, "energy_wh": 14520, "volume_l": 1840 },
-    { "id": 2, "apt": "OG5", "type": "RAD", "t_fwd": 38.1, "t_bwd": 30.2, "spreading_k": 7.9, "flow_lh": 0,   "heat_power_w": 0,    "energy_wh": 0,     "volume_l": 0 },
-    { "id": 3, "apt": "OG4", "type": "RAD", "t_fwd": 32.0, "t_bwd": 26.5, "spreading_k": 5.5, "flow_lh": 160, "heat_power_w": 1023, "energy_wh": 8920,  "volume_l": 1390 },
-    { "id": 4, "apt": "EG4", "type": "FBH", "t_fwd": 41.5, "t_bwd": 33.1, "spreading_k": 8.4, "flow_lh": 0,   "heat_power_w": 0,    "energy_wh": 0,     "volume_l": 0 }
+    { "id": 1, "apt": "EG5", "type": "FBH", "t_fwd": 35.2, "t_bwd": 28.4, "spreading_k": 6.8, "flow_lh": 215, "flow_primary_lh": 40, "flow_bypass_lh": 175, "mix_primary_pct": 18.6, "heat_power_w": 1701, "energy_wh": 14520, "volume_l": 1840 },
+    { "id": 2, "apt": "OG5", "type": "RAD", "t_fwd": 38.1, "t_bwd": 30.2, "spreading_k": 7.9, "flow_lh": 0,   "flow_primary_lh": 0,  "flow_bypass_lh": 0,   "mix_primary_pct": 0.0,  "heat_power_w": 0,    "energy_wh": 0,     "volume_l": 0 },
+    { "id": 3, "apt": "OG4", "type": "RAD", "t_fwd": 32.0, "t_bwd": 26.5, "spreading_k": 5.5, "flow_lh": 160, "flow_primary_lh": 23, "flow_bypass_lh": 137, "mix_primary_pct": 14.3, "heat_power_w": 1023, "energy_wh": 8920,  "volume_l": 1390 },
+    { "id": 4, "apt": "EG4", "type": "FBH", "t_fwd": 41.5, "t_bwd": 33.1, "spreading_k": 8.4, "flow_lh": 0,   "flow_primary_lh": 0,  "flow_bypass_lh": 0,   "mix_primary_pct": 0.0,  "heat_power_w": 0,    "energy_wh": 0,     "volume_l": 0 }
   ],
   "valves": [
     { "id": 1, "state": "STOP",  "runtime_remain_ms": 0 },
@@ -464,6 +501,7 @@ Das Web-Dashboard wird als kompakte Single-Page-Application (SPA in modernem Dar
 │  │ Mischer: STOP    ││ Mischer: AUF 3s  ││ Mischer: STOP    ││ Mischer: ZU ││
 │  │ Pumpe: EIN (65%) ││ Pumpe: EIN (50%) ││ Pumpe: EIN (70%) ││ Pumpe: AUS ││
 │  │ 18.5W · 215 l/h  ││ 12.0W · 160 l/h  ││ 22.0W · 240 l/h  ││ 0W · 0 l/h    ││
+│  │ Prim: 23% (49l/h)││ Prim: 14% (22l/h)││ Prim: 25% (60l/h)││ Prim: 0%  (0l/h)││
 │  │ [Hand] [Auf] [Zu]││ [Hand] [Auf] [Zu]││ [Hand] [Auf] [Zu]││ [Hand] ...  ││
 │  └──────────────────┘└──────────────────┘└──────────────────┘└─────────────┘│
 ├──────────────────────────────────────────────────────────────────────────────┤
