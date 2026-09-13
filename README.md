@@ -464,22 +464,79 @@ Alle 120s: WMZ Tauchhülse (T_WMZ) ┘                               ▼
 | **$42{,}0 \dots 45{,}0\,^\circ\text{C}$** | **STOP (Totzone)** | Relais stromlos | **Kein Verschleiß, maximale Wärme gehalten** |
 | **$45{,}1 \dots 47{,}9\,^\circ\text{C}$** | **ZU**-Impuls | $t = (T - 44) \cdot 1{,}5\,\text{s}$ (3–5 s) / **15 s Pause** | **Asymmetrisch:** Bremst 3x schneller ab als er öffnet |
 | **$48{,}0 \dots 49{,}9\,^\circ\text{C}$** | **Dauerhaft ZU** | Mischer fährt kontinuierlich ZU | Sofortiger Schutz vor 50 °C |
-| **$\ge 50{,}0\,^\circ\text{C}$** | **Hard-Cutoff** | Mischer voll ZU + **Pumpe AUS** + Alarm | Physikalischer Schutz & Telegram-Push |
+| **$\ge 50{,}0\,^\circ\text{C}$** | **Stufenweiser Not-Stopp** | 1. Mischer voll ZU + **Pumpe auf Minimum (10–15%)** gegen Rückfluss<br>2. Erst bei anhaltendem Anstieg: **Relais AUS** + Alarm | Verhindert Rückwärtssaugen & schützt Estrich |
 
 #### Mechanische Montageempfehlung:
 * Zwischen Rohr und DS18B20-Sensor unbedingt **Wärmeleitpaste** anbringen.
 * Den Sensor mit **Rohrisolierung (Armaflex/Schaumstoff)** nach außen dämmen, um den Kühleffekt der Kellerluft zu minimieren.
 
-#### Autonome Sicherheitsabschaltung bei Übertemperatur (Hard-Cutoff):
-Steigt die Vorlauftemperatur an HK 1 oder HK 4 trotz aller Regelung über **50,0 °C**:
-1. Der ESP32 fährt den Mischer **sofort und ohne Verzögerung voll auf ZU** (Vorrang vor allen externen API-Befehlen und vor dem Notfallmodus).
-2. Steigt die Temperatur trotz ZU-Fahrt weiter an (z. B. Mischer defekt oder undicht), schaltet der ESP32 das **230V-Pumpenrelais des betroffenen FBH-Kreises ab**, um den Heißwasserzufluss physikalisch zu stoppen.
-3. Über die Telegram-Bot-API wird sofort eine **Warnmeldung mit Alarmton** abgesetzt:  
-   *`"🚨 ALARM: FBH Übertemperatur an HK 1 (51.2 °C)! Mischer ZU gefahren & Pumpe abgeschaltet!"`*
+#### Autonome Sicherheitsabschaltung bei Übertemperatur (Stufenweiser Not-Stopp):
+Da am Verteilerbalken **keine mechanischen Rückschlagventile** verbaut sind, darf eine überhitzte Pumpe **keinesfalls schlagartig auf 0 geschaltet werden**, solange Nachbarpumpen laufen. Ein sofortiges Abschalten würde dazu führen, dass die Nachbarpumpen heißes Wasser rückwärts durch den Kreis saugen!
+
+Steigt die Vorlauftemperatur an HK 1 oder HK 4 trotz Schrittregler über **50,0 °C**:
+1. **Stufe 1 (Mischer-Verriegelung & Anti-Rückfluss-Drosselung):**
+   * Der ESP32 fährt den Mischer **sofort mit höchster Priorität voll auf ZU** (unterbindet den Heißwasser-Zulauf vom Kesselbalken vollständig).
+   * Die Heizkreispumpe wird **NICHT sofort abgeschaltet**, sondern auf **Minimaldrehzahl gedrosselt (ca. 10–15 % PWM)**.
+   * *Hydraulischer Effekt:* Die Minimaldrehzahl hält einen leichten Vorwärtsdruck aufrecht, der ein Rückwärtssaugen durch Nachbarpumpen physikalisch unterbindet. Da der Mischer zu ist, wälzt die Pumpe rein intern im FBH-Sekundärkreis um. Die im Estrich abgegebene Wärme kühlt das Wasser innerhalb von 30–60 Sekunden rasch herunter.
+2. **Stufe 2 (Beobachtungsfenster & Physikalische Relais-Trennung):**
+   * Fällt die Temperatur wieder unter 48 °C, bleibt die Pumpe im Minimum und der Mischer ZU, bis eine geordnete Normalisierung eintritt.
+   * Steigt die Temperatur jedoch trotz geschlossenem Mischer nach 30–60 Sekunden weiter an (z. B. Mischer mechanisch blockiert, defekt oder undicht), greift die Notbremse: Das **230V-Pumpenrelais wird stromlos geschaltet** und der Mischer aktiv auf ZU gepresst.
+3. **Telegram-Alarmierung:**
+   * Sofortiger Push-Alarm mit Signalton:  
+     *`"🚨 ALARM: FBH Übertemperatur an HK 1 (51.2 °C)! Mischer ZU gefahren, Anti-Rückfluss-Schutz aktiv!"`*
 
 ---
 
-### 5.5 Sommer- / Winter-Umschaltung (Heizgrenze für Altbau)
+### 5.5 Hydraulische Rückfluss-Erkennung & Schutz (bei fehlenden Rückschlagventilen)
+
+Am gemeinsamen Heizverteilerbalken fehlen mechanische Rückschlagventile (Rückflussverhinderer / Schwerkraftbremsen). Dies birgt ein wesentliches hydraulisches Risiko für Fehlzirkulationen („Geisterströmungen“):
+
+```text
+[ Vorlauf-Balken ] ═══════► (Andere aktive Kreise saugen stark) ═══════►
+                                     ▲
+                                     │ FEHLZIRKULATION (Rückfluss)
+                                     │ wenn Pumpe HK_x steht!
+[ Rücklauf-Balken ] ══════ (Warmes Rücklaufwasser drückt rückwärts) ═══
+```
+
+#### 1. Die physikalische Gefahr:
+Wird ein Heizkreis abgeschaltet oder stark gedrosselt, während andere Heizkreise (z. B. die ungemischten Radiatoren-Kreise HK 2 / HK 3 mit hoher Förderleistung) laufen, entsteht am Balken eine Druckdifferenz. Das Heizungswasser nimmt den Weg des geringsten Widerstands und wird **rückwärts aus dem Rücklaufbalken durch den stehenden Heizkreis gesaugt**.
+* **Folgen:** Ungewollte Erwärmung/Abkühlung von Räumen, erhebliche Energieverluste und Verfälschung aller Temperatur- und Wärmemengenmessungen.
+
+#### 2. Intelligente Multifaktor-Erkennungslogik (Anti-False-Alarm):
+Der ESP32-C6 erkennt einen hydraulischen Rückfluss autonom, ohne im Sommer oder bei ruhender Gesamtanlage Fehlalarme auszulösen:
+
+```text
+Prüfung auf Rückfluss (alle 5 Sekunden):
+├─ 1. Heizbetrieb aktiv (Winter) UND mindestens eine Nachbarpumpe fördert?
+│     └── NEIN: Prüfung abbrechen (Im Sommer oder bei Gesamtstillstand normal!)
+├─ 2. Signifikante Temperatur-Inversion: T_RL - T_VL >= 3,0 K über > 60 Sekunden?
+│     └── NEIN: Keine Fehlzirkulation
+└─ 3. Plausibilisierung via WMZ / Feedback:
+      ├─ WMZ meldet negative Strömung (Reverse-Flow-Status) ODER P_th < 0?
+      ├─ ODER: Pumpe steht (0 Hz / 0 W), aber WMZ meldet Durchfluss > 0 l/h?
+      └── BEI BESTÄTIGUNG ──► RÜCKFLUSS ERKANNT!
+```
+
+* **Kein Fehlalarm im Sommerbetrieb:** Im Sommer oder bei komplett abgeschalteter Heizung kühlt das stehende Wasser im Vorlaufrohr oft schneller ab als im wärmeren Rücklauf (oder umgekehrt durch Raumtemperaturdifferenzen). Daher ist die Rückflusserkennung **nur im aktiven Winter-Heizbetrieb** aktiv und **nur dann, wenn mindestens eine Nachbarpumpe aktiv Druck erzeugt**.
+* **Sicherheits-Totzone ($3{,}0\,\text{K}$):** Geringe Temperaturdifferenzen ($< 2{,}0\,\text{K}$) werden toleriert, da sie bei Stillstand durch sensorische Toleranzen oder Kellerluft entstehen können. Erst ab einer stabilen Inversion von $\ge 3{,}0\,\text{K}$ über mehr als 60 Sekunden schlägt die Erkennung an.
+* **WMZ-Plausibilisierung:** Wärmemengenzähler (M-Bus) erkennen die Fließrichtung. Meldet der WMZ einen negativen Durchfluss, unplausible Nullwerte trotz Temperaturgefälle oder negative Leistung ($T_{\text{bwd}} > T_{\text{fwd}}$), gilt der Rückfluss als messtechnisch verifiziert.
+
+#### 3. Autonome Schutzmaßnahmen des ESP32:
+Wird an einem Kreis ein Rückfluss erkannt:
+1. **Hydraulische Trennung (Mischer VOLL ZU):**
+   * Der 3-Wege-Mischer des betroffenen Kreises fährt sofort auf **100 % ZU**. Dies sperrt den Bypass zum Vorlaufbalken ab und unterbricht den hydraulischen Kurzschluss zum Primärnetz.
+2. **Anti-Rückfluss-Stützdruck (Minimaler Vorwärtsstrom):**
+   * Ist der Mischer bereits zu, aber durch Restleckage oder Druckgefälle drückt das Rücklaufwasser weiter durch, startet der ESP32 die Pumpe mit **Minimaldrehzahl (10–15 % PWM)**.
+   * Der erzeugte Vorwärtsdruck überwindet den Saugdruck der Nachbarpumpen und stellt sofort die korrekte Strömungsrichtung her.
+3. **Monitoring & Service-Meldung:**
+   * In InfluxDB wird das Flag `reverse_flow_active = true` gesetzt.
+   * Hält der Zustand länger als 5 Minuten an, sendet der Telegram-Bot einen Service-Hinweis an den Betreiber:  
+     *`"⚠️ HINWEIS: Rückfluss an HK 1 erkannt (T_RL > T_VL um 3.8 K durch Nachbarpumpen). Mischer geschlossen & Stützdruck aktiviert. Bitte Schwerkraftbremse prüfen."`*
+
+---
+
+### 5.6 Sommer- / Winter-Umschaltung (Heizgrenze für Altbau)
 
 Aufgrund der thermischen Trägheit und der höheren Transmissionswärmeverluste des Altbaus muss die Heizung im Frühjahr länger laufen und im Herbst früher anspringen als in modernen Gebäuden:
 
