@@ -153,6 +153,73 @@ Damit ist das System unabhängig vom 120-Sekunden-Batterieintervall der M-Bus-Z�
 
 ---
 
+### E. Verteilerbalken-Gesamtbilanzierung (Primärdurchfluss & Gesamt-Wärmemenge aus WMZ & VDMA)
+
+Aus den Messwerten der 4 Heizkreise und den beiden 1-Wire-Fühlern am Verteilerbalken (Vorlauf & Rücklauf) berechnet der ESP32 **ohne zusätzlichen Primär-Wärmemengenzähler** die vollständige thermodynamische Gesamtbilanz der Heizzentrale.
+
+Die Bilanzierung erfolgt parallel über **zwei unabhängige Quellen**:
+1. **VDMA-Quelle (1-Hz-Echtzeitbilanz aus Pumpen-Feedback & DS18B20):** Liefert kontinuierliche, sekundengenaue Live-Werte für Regelung, Mischerdynamik und Lastoptimierung.
+2. **WMZ-Quelle (120s-Bilanz aus M-Bus-Zählern):** Liefert die hochpräzise, geeichte Verbrauchsbilanz der verbauten Ultraschall-/Flügelradzähler.
+
+```text
+               ┌───────────────────────────────────────────────────────────┐
+               │              PUFFERSPEICHER / KESSEL (PRIMÄRKREIS)        │
+               └─────────────────────────────┬─────────────────────────────┘
+                                             │
+      Vorlauf Primär (T_balken_VL) ──────────┼──────────► Rücklauf Primär (T_balken_RL)
+                                             │
+                   ΔT_balken = T_balken_VL - T_balken_RL [K]
+                                             │
+      ┌──────────────────────────────────────┴──────────────────────────────────────┐
+      │                        VERTEILERBALKEN (HAUPTVERTEILER)                    │
+      └───┬───────────────────┬───────────────────┬───────────────────┬─────────────┘
+          ▼ HK 1 (EG 5)       ▼ HK 2 (OG 5)       ▼ HK 3 (OG 4)       ▼ HK 4 (EG 4)
+       [P_th,1, Q_1]       [P_th,2, Q_2]       [P_th,3, Q_3]       [P_th,4, Q_4]
+          │                   │                   │                   │
+          └───────────────────┴─────────┬─────────┴───────────────────┘
+                                        ▼
+                   P_ges = ∑ P_th,i  (Gesamtleistung der Heizkreise)
+                                        │
+           Q_balken = P_ges / (ΔT_balken * 1,163)  (Primärdurchfluss vom Kessel)
+```
+
+#### 1. Formeln & Berechnungsschritte:
+
+* **Spreizung des Verteilerbalkens ($\Delta T_{\text{balken}}$):**
+  $$\Delta T_{\text{balken}} = T_{\text{balken, VL}} - T_{\text{balken, RL}} \quad [\text{K}]$$
+
+* **Gesamte thermische Heizleistung ($P_{\text{ges}}$ in Watt):**
+  $$P_{\text{ges, VDMA}} = \sum_{i=1}^{4} P_{\text{th, VDMA}, i} \quad [\text{W}], \qquad P_{\text{ges, WMZ}} = \sum_{i=1}^{4} P_{\text{th, WMZ}, i} \quad [\text{W}]$$
+
+* **Errechneter Primärdurchfluss durch den Verteilerbalken ($Q_{\text{balken}}$ in l/h):**
+  Da die Summe der Heizkreisleistungen der über den Balken transportierten Primärenergie entspricht ($P_{\text{balken}} = P_{\text{ges}} = Q_{\text{balken}} \cdot \Delta T_{\text{balken}} \cdot c_{\text{water}}$), lässt sich der Volumenstrom vom Kessel direkt rückrechnen:
+  $$Q_{\text{balken, VDMA}} = \frac{P_{\text{ges, VDMA}}}{\Delta T_{\text{balken}} \cdot 1{,}163\,\frac{\text{Wh}}{\text{kg}\cdot\text{K}}} \quad [\text{l/h}]$$
+  $$Q_{\text{balken, WMZ}} = \frac{P_{\text{ges, WMZ}}}{\Delta T_{\text{balken}} \cdot 1{,}163\,\frac{\text{Wh}}{\text{kg}\cdot\text{K}}} \quad [\text{l/h}]$$
+  *(Plausibilitätskriterium: Berechnung aktiv wenn $\Delta T_{\text{balken}} \ge 0{,}5\,\text{K}$ und $P_{\text{ges}} > 0$; sonst $Q_{\text{balken}} = 0\,\text{l/h}$)*
+
+* **Gesamt-Wärmemenge des Verteilerbalkens ($E_{\text{balken}}$ in Wh / kWh):**
+  * **Aus VDMA (kontinuierlich sekündlich im RAM/Flash integriert):**
+    $$E_{\text{balken, VDMA}} += P_{\text{ges, VDMA}} \cdot \frac{1}{3600}\,\text{h} \quad [\text{Wh}]$$
+  * **Aus WMZ (Summe der Hardware-Zählerstände):**
+    $$E_{\text{ges, WMZ}} = \sum_{i=1}^{4} E_{\text{WMZ}, i} \quad [\text{Wh}]$$
+
+* **Kumuliertes Primär-Wasservolumen ($V_{\text{balken}}$ in Litern):**
+  * **Aus VDMA:**
+    $$V_{\text{balken, VDMA}} += Q_{\text{balken, VDMA}} \cdot \frac{1}{3600}\,\text{h} \quad [\text{l}]$$
+  * **Aus WMZ:**
+    $$V_{\text{ges, WMZ}} = \sum_{i=1}^{4} V_{\text{WMZ}, i} \quad [\text{l}]$$
+
+#### 2. Praktischer Mehrwert für Betrieb & Hydraulik:
+1. **Kein teurer Primär-WMZ erforderlich:** Der Durchfluss und Wärmeverbrauch der Heizzentrale (Pufferspeicher/Kessel) wird exakt bestimmt, ohne Rohrleitungen auftrennen oder teure DN32/DN40-Großzähler installieren zu müssen.
+2. **Redundanz & Sensor-Plausibilisierung:** Weichen VDMA- und WMZ-Werte am Balken dauerhaft voneinander ab, erkennt der ESP32 sofort defekte Fühler, klemmende Ventile oder verschmutzte Zähler.
+3. **Mischer-Bypassgrad (Primär-Beimischverhältnis $\eta_{\text{primär}}$):**
+   In den Heizkreisen wälzen die 4 Pumpen in Summe $\sum Q_{\text{kreis}, i}$ um. Da die 3-Wege-Mischer kaltes Kreisrücklaufwasser beimischen, ist der Primärdurchfluss $Q_{\text{balken}}$ kleiner als die Summe der Sekundärdurchflüsse:
+   $$\eta_{\text{primär}} = \frac{Q_{\text{balken}}}{\sum_{i=1}^{4} Q_{\text{kreis}, i}}$$
+   * $\eta \approx 1{,}0$ (100 %): Mischer sind voll geöffnet; Primärwasser strömt ungemischt in die Heizkreise.
+   * $\eta \approx 0{,}3$ (30 %): Starke Beimischung; die FBH zirkuliert zu 70 % ihr eigenes Wasser und entzieht dem Kessel nur 30 % Nachspeisung.
+
+---
+
 ## 4. M-Bus Wärmemengenzähler (Heatmeter)
 
 > [!NOTE]
@@ -225,7 +292,20 @@ Liefert alle erfassten Messwerte, Aktorzustände und Systemmetriken als kompakte
     "ruecklauf": [28.4, 30.2, 26.5, 33.1],
     "verteilerbalken": {
       "vorlauf": 65.0,
-      "ruecklauf": 35.0
+      "ruecklauf": 35.0,
+      "spreading_k": 30.0,
+      "vdma": {
+        "heat_power_w": 2724,
+        "flow_primary_lh": 78,
+        "energy_wh": 14520,
+        "volume_l": 415
+      },
+      "wmz": {
+        "heat_power_w": 2230,
+        "flow_primary_lh": 64,
+        "energy_wh": 2992400,
+        "volume_l": 128160
+      }
     },
     "schaltbox": {
       "relais": 32.5,
@@ -245,10 +325,10 @@ Liefert alle erfassten Messwerte, Aktorzustände und Systemmetriken als kompakte
     { "id": 4, "enabled": false, "pwm": 0,  "feedback_hz": 0.0,  "power_w": 0.0,  "status": "STANDBY", "flow_est_lh": 0 }
   ],
   "circuits": [
-    { "id": 1, "apt": "EG5", "type": "FBH", "t_fwd": 35.2, "t_bwd": 28.4, "spreading_k": 6.8, "flow_lh": 215, "heat_power_w": 1701 },
-    { "id": 2, "apt": "OG5", "type": "RAD", "t_fwd": 38.1, "t_bwd": 30.2, "spreading_k": 7.9, "flow_lh": 0,   "heat_power_w": 0 },
-    { "id": 3, "apt": "OG4", "type": "RAD", "t_fwd": 32.0, "t_bwd": 26.5, "spreading_k": 5.5, "flow_lh": 160, "heat_power_w": 1023 },
-    { "id": 4, "apt": "EG4", "type": "FBH", "t_fwd": 41.5, "t_bwd": 33.1, "spreading_k": 8.4, "flow_lh": 0,   "heat_power_w": 0 }
+    { "id": 1, "apt": "EG5", "type": "FBH", "t_fwd": 35.2, "t_bwd": 28.4, "spreading_k": 6.8, "flow_lh": 215, "heat_power_w": 1701, "energy_wh": 14520, "volume_l": 1840 },
+    { "id": 2, "apt": "OG5", "type": "RAD", "t_fwd": 38.1, "t_bwd": 30.2, "spreading_k": 7.9, "flow_lh": 0,   "heat_power_w": 0,    "energy_wh": 0,     "volume_l": 0 },
+    { "id": 3, "apt": "OG4", "type": "RAD", "t_fwd": 32.0, "t_bwd": 26.5, "spreading_k": 5.5, "flow_lh": 160, "heat_power_w": 1023, "energy_wh": 8920,  "volume_l": 1390 },
+    { "id": 4, "apt": "EG4", "type": "FBH", "t_fwd": 41.5, "t_bwd": 33.1, "spreading_k": 8.4, "flow_lh": 0,   "heat_power_w": 0,    "energy_wh": 0,     "volume_l": 0 }
   ],
   "valves": [
     { "id": 1, "state": "STOP",  "runtime_remain_ms": 0 },
@@ -370,8 +450,10 @@ Das Web-Dashboard wird als kompakte Single-Page-Application (SPA in modernem Dar
 │  🔥 SMARTER HEIZUNGSVERTEILER (KHV) - DASHBOARD              [NOTFALL-MODUS] │
 │  WLAN: Verbunden (-65 dBm) │ Uptime: 14h 22m │ Modus: WINTER │ InfluxDB: OK │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│  ═══ VERTEILERBALKEN (HAUPTVERSORGUNG) ═════════════════════════════════════ │
-│  Vorlauf: 65.2 °C    │    Rücklauf: 35.0 °C    │    Spreizung (ΔT): 30.2 K    │
+│  ═══ VERTEILERBALKEN (HAUPTVERSORGUNG & GESAMTBILANZ) ═══════════════════════ │
+│  Vorlauf: 65.2 °C   │   Rücklauf: 35.0 °C   │   Spreizung (ΔT): 30.2 K        │
+│  VDMA-Bilanz: 2.72 kW · 78 l/h (Primär) · 14.5 kWh (Tag)                      │
+│  WMZ-Bilanz:  2.23 kW · 64 l/h (Primär) · 2.99 MWh (Gesamt)                  │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │  ═══ DIE 4 HEIZKREISE (LIVE-ÜBERWACHUNG & AKTORIK) ═════════════════════════ │
 │  ┌──────────────────┐┌──────────────────┐┌──────────────────┐┌─────────────┐│
@@ -653,6 +735,14 @@ Senden an InfluxDB? = (Δt >= min_interval) AND (|ΔWert| >= Threshold OR Δt >=
 | **Wärmemengenzähler (M-Bus)** | Vorlauftemperatur (`t_fwd`) | `0,1` | `20,0` | `120 s` | °C |
 | **Wärmemengenzähler (M-Bus)** | Rücklauftemperatur (`t_bwd`) | `0,1` | `20,0` | `120 s` | °C |
 | **Wärmemengenzähler (M-Bus)** | Spreizung (`spreading_k`) | `0,1` | `20,0` | `120 s` | K |
+| **Verteilerbalken Gesamt (VDMA)** | Gesamtleistung (`heat_power_w`, zeitgew.) | `50` | `40.000` | `60 s` | W |
+| **Verteilerbalken Gesamt (VDMA)** | Gesamt-Wärmemenge (`energy_wh`, mon.)     | `20` | `100.000`| `60 s` | Wh |
+| **Verteilerbalken Gesamt (VDMA)** | Primär-Durchfluss (`flow_lh`, zeitgew.)   | `5`  | `2.000`  | `60 s` | l/h |
+| **Verteilerbalken Gesamt (VDMA)** | Primär-Volumen (`volume_l`, mon.)         | `5`  | `5.000`  | `60 s` | l |
+| **Verteilerbalken Gesamt (WMZ)**  | Gesamtleistung (`heat_power_w`)           | `50` | `40.000` | `120 s`| W |
+| **Verteilerbalken Gesamt (WMZ)**  | Gesamt-Wärmemenge (`energy_wh`, Zähler)   | `500`| `100.000`| `120 s`| Wh |
+| **Verteilerbalken Gesamt (WMZ)**  | Primär-Durchfluss (`flow_lh`)             | `5`  | `2.000`  | `120 s`| l/h |
+| **Verteilerbalken Gesamt (WMZ)**  | Primär-Volumen (`volume_l`, Zähler)       | `10` | `5.000`  | `120 s`| l |
 
 ---
 
