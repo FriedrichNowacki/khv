@@ -123,24 +123,33 @@ Die 4 Hocheffizienzpumpen werden über eine Kombination aus 230V-Netzfreigabe, P
 
 ---
 
-### D. Virtuelle Wärmemengenzähler (Sekundengenaue Heizkreis-Leistungsberechnung)
+### D. Virtuelle Wärmemengenzähler (VDMA als vollwertiges WMZ-Äquivalent inkl. Wärmemenge)
 
-Um nicht an das 120-Sekunden-Batteriesparintervall der M-Bus-Zähler gebunden zu sein (und um für **HK 1: EG 5**, wo der physikalische WMZ noch in Vorbereitung ist, sofort Live-Werte zu haben), berechnet der ESP32 für alle 4 Heizkreise kontinuierlich die thermodynamischen Leistungsdaten wie ein Wärmemengenzähler – **jedoch ohne kumulierte Energie (`energy_wh`)**:
+Das Zusammenspiel aus **VDMA 75-Hz-Pumpenfeedback** (elektrische Leistung $P_{\text{el}} \to$ Durchfluss $Q_{\text{est}}$ via 2D-Kennfeld) und den **1-Wire DS18B20-Temperaturfühlern** bildet ein **vollwertiges Software-Äquivalent zu einem physikalischen Wärmemengenzähler (WMZ)**.
 
-1. **Eingangsgrößen je Heizkreis $i \in \{1, 2, 3, 4\}$:**
-   * Vorlauftemperatur $T_{\text{VL}, i}$ (DS18B20 Strang 1)
-   * Rücklauftemperatur $T_{\text{RL}, i}$ (DS18B20 Strang 2)
+Damit ist das System unabhängig vom 120-Sekunden-Batterieintervall der M-Bus-Zähler und liefert sekündliche Echtzeitwerte – insbesondere für **HK 1: EG 5**, wo der physikalische WMZ noch in Vorbereitung ist, sowie zur kontinuierlichen Redundanz- und Plausibilitätsprüfung für alle Kreise:
+
+1. **Eingangsgrößen je Heizkreis $i \in \{1, 2, 3, 4\}$ (1-Hz-Erfassung):**
+   * Vorlauftemperatur $T_{\text{VL}, i}$ (DS18B20 Vorlauf)
+   * Rücklauftemperatur $T_{\text{RL}, i}$ (DS18B20 Rücklauf)
    * Geschätzter Volumenstrom $Q_{\text{est}, i}$ in Litern pro Stunde (aus Pumpenkennlinienfeld)
 
-2. **Berechnete Werte (analog WMZ):**
+2. **Berechnete Werte (vollständig äquivalent zum physischen WMZ):**
    * **Spreizung ($\Delta T$):**
      $$\Delta T_i = T_{\text{VL}, i} - T_{\text{RL}, i} \quad [\text{K}]$$
    * **Thermische Momentanleistung ($P_{\text{th}}$ in Watt):**
      $$P_{\text{th}, i} = Q_{\text{est}, i} \cdot \Delta T_i \cdot 1{,}163\,\frac{\text{Wh}}{\text{kg}\cdot\text{K}} \quad [\text{W}]$$
      *(Bedingung: Falls Pumpe AUS, $Q_{\text{est}} \le 0$ oder $\Delta T \le 0 \implies P_{\text{th}} = 0\,\text{W}$)*
-   * **Durchfluss ($Q$):** $Q_{\text{est}, i}$ in $\text{l}/\text{h}$
+   * **Kumulierte Wärmemenge ($E_{\text{th}}$ / `virtual_energy_wh` in Wh bzw. kWh):**
+     Der ESP32 integriert sekündlich die thermische Energie auf ($E_{\text{th}} += P_{\text{th}} \cdot \frac{1}{3600}\,\text{h}$). Dies entspricht exakt dem Zählerstand `energy_wh` eines physischen WMZ.
+   * **Kumuliertes Fördervolumen ($V$ / `virtual_vol_l` in Litern):**
+     Ebenso wird der Durchfluss sekündlich zum Gesamtvolumen aufsummiert ($V += Q_{\text{est}} \cdot \frac{1}{3600}\,\text{h}$), äquivalent zu `volume_l` des WMZ.
+   * **Momentaner Durchfluss ($Q$):** $Q_{\text{est}, i}$ in $\text{l}/\text{h}$
    * **Vorlauf- & Rücklauftemperatur:** $T_{\text{VL}, i}$, $T_{\text{RL}, i}$ in °C
-   * **Hinweis zu kumulierter Energie:** Es wird **keine** Energie aufsummiert (`energy_wh = entfällt`), um Drift durch Schätzfehler zu vermeiden. Die verbindliche Abrechnungs- und Verbrauchsenergie stammt ausschließlich von den physikalischen M-Bus-Zählern.
+   * **Rolle im Gesamtsystem:**
+     * **HK 1 (EG 5):** Vollwertiger Arbeitszähler für Wärme und Volumen, solange noch kein physischer Zähler eingebaut ist.
+     * **HK 2, 3, 4:** 1-Hz-Echtzeitreferenz für schnelle Mischerregelung sowie Drift- und Plausibilitätsüberwachung gegenüber den physischen M-Bus-Zählern.
+     * *Abrechnungshinweis:* Für behördlich verbindliche Heizkostenabrechnungen (nach HeizkostenV) gelten vorrangig die MID-geeichten M-Bus-Zähler; die virtuellen VDMA-Zähler dienen dem hochauflösenden Monitoring, der energetischen Optimierung und dem unterbrechungsfreien Weiterbetrieb bei Zählerausfall.
 
 ---
 
@@ -604,12 +613,12 @@ Um eine Datenflut in InfluxDB zuverlässig zu unterbinden (z. B. bei Sensorrausc
 
 1. **Mindestabstand eingehalten (Rate Limit / `min_interval`):**
    * Seit dem letzten Senden dieses spezifischen Messwerts muss die konfigurierte Mindestzeit vergangen sein:
-     $$\Delta t_{\text{seit\_letztem\_Senden}} \ge \text{min\_interval}$$
-   * Ist diese Zeit noch nicht verstrichen, wird der Wert verworfen (nicht gesendet), selbst wenn der Schwellwert überschritten wäre.
+     $$\Delta t \ge \Delta t_{\text{min}}$$
+   * Ist diese Zeit noch nicht verstrichen ($\Delta t < \Delta t_{\text{min}}$), wird der Wert verworfen (nicht gesendet), selbst wenn der Schwellwert überschritten wäre.
 2. **Wertänderung ODER Maximalzeit (Heartbeat / `max_interval`):**
    * Ist der Mindestabstand erfüllt, wird gesendet, sobald mindestens eine Bedingung zutrifft:
-     * **Schwellwert überschritten:** $|\text{Aktueller\_Wert} - \text{Letzter\_Gesendeter\_Wert}| \ge \text{Threshold}$
-     * **Maximalzeit abgelaufen:** $\Delta t_{\text{seit\_letztem\_Senden}} \ge \text{max\_interval}$ (standardmäßig 600 s / 10 min als Lebenszeichen).
+     * **Schwellwert überschritten:** $$|\text{Wert}_{\text{aktuell}} - \text{Wert}_{\text{gesendet}}| \ge \text{Threshold}$$
+     * **Maximalzeit abgelaufen:** $$\Delta t \ge \Delta t_{\text{max}}$$ (standardmäßig 600 s / 10 min als Lebenszeichen).
 
 ```text
 Senden an InfluxDB? = (Δt >= min_interval) AND (|ΔWert| >= Threshold OR Δt >= max_interval)
