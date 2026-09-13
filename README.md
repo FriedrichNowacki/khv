@@ -402,13 +402,16 @@ Fällt die übergeordnete Steuerung (Raspberry Pi / Home Assistant / Node-RED) o
 * **WLAN-Verbindungsverlust:** Wenn der ESP32 länger als **15 Minuten** die Verbindung zum WLAN-Router verliert.
 
 #### 2. Regelverhalten im Notfallmodus:
-* Alle 4 Pumpen werden eingeschaltet (Freigaberelais aktiv, feste Grunddrehzahl ca. **60–70 % PWM**).
-* Die 3-Wege-Mischer fahren auf **Wärmeanforderung**, um die Versorgung sicherzustellen – **unter strikter Beachtung des FBH-Schutzes (siehe 5.4)**.
+* **Pumpen 1–4:** Werden eingeschaltet (Freigaberelais aktiv, Grunddrehzahl ca. **60–70 % PWM**).
+* **Radiatoren-Heizkreise (HK 2: OG 5 & HK 3: OG 4):**
+  * Da Heizkörper unkritisch gegen hohe Vorlauftemperaturen sind, fahren die Mischer auf **80–100 % AUF** (Balkentemperatur bis 65 °C), um den ungedämmten Altbau maximal zu heizen.
+* **Fußbodenheizung (HK 1: EG 5 & HK 4: EG 4):**
+  * Werden durch einen **autarken Dreipunkt-Schrittregler mit Sensor-Fusion und Gradienten-Bremse** auf maximaler sicherer Temperatur gehalten (siehe 5.4).
 * Sobald wieder gültige REST-Befehle der Hauptregelung eintreffen oder der Notfallmodus im UI deaktiviert wird, schaltet das System nahtlos zurück in den regulären Regelbetrieb.
 
 ---
 
-### 5.4 FBH-Übertemperaturschutz (Sicherheitsgrenzen für Altbau)
+### 5.4 FBH-Notfallregelung & Übertemperaturschutz (Altbau)
 
 Das Gebäude besitzt zwei grundverschiedene Heizkreis-Arten:
 * **Heizkreis 1 (EG 5) & Heizkreis 4 (EG 4):** **Fußbodenheizung (FBH)**
@@ -418,16 +421,57 @@ Das Gebäude besitzt zwei grundverschiedene Heizkreis-Arten:
 > **FBH-Schutz hat immer höchste Priorität:**
 > Eine Fußbodenheizung darf niemals die Vorlauftemperatur von Heizkörpern oder des Verteilerbalkens (bis 70 °C) abbekommen. Hohe Temperaturen führen zu Zerstörung des Estrichs, Lösen von Fliesen und irreversiblen Schäden an Parkett- und Bodenbelägen!
 
-#### Spezifische Grenzwerte & Verhalten für Altbau:
-Da es sich um ein ungedämmtes bzw. älteres Gebäude handelt, sind die Systemtemperaturen der FBH höher angesetzt als in modernen Niedrigenergie-Neubauten (wo 35 °C genügen):
+#### Physikalische Herausforderung bei Anlegefühlern (DS18B20 vs. WMZ):
+1. **Große thermische Totzeit (30–60 Sekunden):** Die DS18B20 sind außen am Rohr befestigt. Bis heißes Wasser aus dem Mischer die Rohrwand und den Fühlerkörper durchwärmt, vergeht bis zu eine Minute (PT1/PT2-Verhalten).
+2. **Kühlkörper-Effekt (Nie-Echtwert-Erreichung):** Die Sensorrückseite gibt Wärme an die kühlere Kellerluft ab. Ohne Korrektur misst der Rohranleger $2 \dots 3\,\text{K}$ kälter als das Wasser im Rohrinneren (z. B. Rohrwand 42 °C, Kernwasser bereits 45 °C!).
+3. **Asynchrone Sensorik:** Die extrem genauen WMZ-Tauchhülsen senden nur alle **120 Sekunden** (Batterieschutz), an HK 1 ist der WMZ noch in Vorbereitung.
+4. **Warum Standard-PID-Regler hier versagen würden (Hunting-Gefahr):**
+   * Ein normaler PI/PID-Regler integriert den Regelfehler permanent auf ($I$-Anteil).
+   * Da der Anlegefühler erst mit 30–60 s Verzug reagiert, denkt ein Standard-PID, es sei immer noch zu kalt, und fährt den Mischer viel zu weit auf.
+   * Wenn die Hitzewelle nach einer Minute am Sensor ankommt, schießt die Temperatur unweigerlich über 50 °C hinaus und löst eine Notabschaltung aus (*Hunting / Aufschaukeln*).
 
-| Heizkreis-Typ | Normaler Vorlauf | Notfall-Sollwert (Altbau) | Hard-Cutoff / Schutzabschaltung |
+#### Lösung: 3-stufige Sensor-Fusion & Notfall-Regelungsarchitektur:
+
+```text
+Alle 2-5s: DS18B20 (T_DS) ────────┐
+                                  ▼
+                         [ T_eff = T_DS + Offset ] ───► [ Gradienten-Bremse (dT/dt) ]
+                                  ▲                               │
+Alle 120s: WMZ Tauchhülse (T_WMZ) ┘                               ▼
+           Offset = T_WMZ - T_DS (langsam gleitend)      [ Asymmetrischer 3-Punkt-Schrittregler ]
+                                                                  │
+                                                       (45-60s Totzeit-Pause nach Impuls)
+```
+
+1. **Sensor-Fusion & Offset-Lernen (Observer-Kompensation):**
+   * Bei aktivem WMZ berechnet der ESP32 alle 120 s den Mess-Offset: $\Delta_{\text{offset}} = T_{\text{WMZ}} - T_{\text{DS18B20}}$.
+   * Der Regler nutzt sekündlich die fusionierte Temperatur: $T_{\text{eff}} = T_{\text{DS18B20}} + \Delta_{\text{offset}}$.
+   * **Reiner DS18B20-Betrieb (z. B. HK 1 ohne WMZ):** Liegt kein WMZ vor, wird $\Delta_{\text{offset}} = 0$ gesetzt und der Regler-Sollwert sicherheitshalber auf **max. 41–42 °C** begrenzt (entspricht ca. 44–45 °C Kernwasser).
+
+2. **Gradienten-Bremse (D-Anteil / Trend-Erkennung $dT/dt$):**
+   * Steigt die Vorlauftemperatur schneller als mit **$+0{,}5\,\text{K} \text{ pro } 10\,\text{Sekunden}$**, werden alle weiteren AUF-Impulse **sofort verriegelt**.
+   * Der Regler wartet ab, bis die Hitzewelle am Sensor vollständig durchgeschlagen ist, bevor erneut geregelt wird.
+
+3. **Erzwungene Totzeit-Pause (45 bis 60 Sekunden Einschwingzeit):**
+   * Nach jedem Stellimpuls (z. B. 2 Sekunden AUF) hält der Regler **mindestens 45–60 Sekunden die Füße still**, damit die Rohrwand das thermische Gleichgewicht erreicht.
+   * Es gibt **keinen I-Anteil**, der weglaufen könnte. Stellentscheidungen fallen ausschließlich im thermisch eingeschwungenen Zustand ($\frac{dT}{dt} \approx 0$).
+
+4. **Asymmetrischer Dreipunkt-Schrittregler (Sollwert: $44{,}0\,^\circ\text{C}$):**
+
+| Vorlauftemperatur ($T_{\text{eff}}$) | Mischer-Aktion | Impuls / Pause | Regelverhalten |
 |---|---|---|---|
-| **FBH (HK 1 & HK 4)** | 35 °C – 45 °C | **max. 48 °C** | **≥ 50,0 °C (Sofortiges Not-ZU)** |
-| **Heizkörper (HK 2 & HK 3)**| 50 °C – 65 °C | **Balken-Temperatur (z. B. 65 °C)** | Keine Begrenzung (bis 75 °C) |
+| **$< 42{,}0\,^\circ\text{C}$** | **AUF**-Impuls | $t = (44 - T) \cdot 0{,}8\,\text{s}$ (max. 3 s) / **45–60 s Pause** | Sanftes Öffnen ohne Überschwingen |
+| **$42{,}0 \dots 45{,}0\,^\circ\text{C}$** | **STOP (Totzone)** | Relais stromlos | **Kein Verschleiß, maximale Wärme gehalten** |
+| **$45{,}1 \dots 47{,}9\,^\circ\text{C}$** | **ZU**-Impuls | $t = (T - 44) \cdot 1{,}5\,\text{s}$ (3–5 s) / **15 s Pause** | **Asymmetrisch:** Bremst 3x schneller ab als er öffnet |
+| **$48{,}0 \dots 49{,}9\,^\circ\text{C}$** | **Dauerhaft ZU** | Mischer fährt kontinuierlich ZU | Sofortiger Schutz vor 50 °C |
+| **$\ge 50{,}0\,^\circ\text{C}$** | **Hard-Cutoff** | Mischer voll ZU + **Pumpe AUS** + Alarm | Physikalischer Schutz & Telegram-Push |
+
+#### Mechanische Montageempfehlung:
+* Zwischen Rohr und DS18B20-Sensor unbedingt **Wärmeleitpaste** anbringen.
+* Den Sensor mit **Rohrisolierung (Armaflex/Schaumstoff)** nach außen dämmen, um den Kühleffekt der Kellerluft zu minimieren.
 
 #### Autonome Sicherheitsabschaltung bei Übertemperatur (Hard-Cutoff):
-Steigt die Vorlauftemperatur an HK 1 oder HK 4 über **50,0 °C**:
+Steigt die Vorlauftemperatur an HK 1 oder HK 4 trotz aller Regelung über **50,0 °C**:
 1. Der ESP32 fährt den Mischer **sofort und ohne Verzögerung voll auf ZU** (Vorrang vor allen externen API-Befehlen und vor dem Notfallmodus).
 2. Steigt die Temperatur trotz ZU-Fahrt weiter an (z. B. Mischer defekt oder undicht), schaltet der ESP32 das **230V-Pumpenrelais des betroffenen FBH-Kreises ab**, um den Heißwasserzufluss physikalisch zu stoppen.
 3. Über die Telegram-Bot-API wird sofort eine **Warnmeldung mit Alarmton** abgesetzt:  
