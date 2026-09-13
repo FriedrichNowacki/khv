@@ -684,6 +684,90 @@ Aufgrund der thermischen Trägheit und der höheren Transmissionswärmeverluste 
   * Jede Pumpe läuft für 60 Sekunden auf 50 % Drehzahl an.
   * Jeder 3-Wege-Mischer fährt für 30 Sekunden AUF und anschließend wieder voll ZU.
 
+---
+
+### 5.7 Web-basiertes OTA-Firmware-Upgrade (Wartungsmodus via WiFi)
+
+Da der ESP32-C6 fest im Verteiler-Schaltschrank im Keller montiert ist, erfolgen Firmware-Aktualisierungen (neue Features, Regleroptimierungen, Bugfixes) drahtlos über das WLAN ohne physischen USB-C-Anschluss:
+
+```text
+[ Browser (Laptop / Smartphone) ] ─── Upload firmware.bin (WiFi) ───► [ Webserver: /update ]
+                                                                               │
+                                                                   ┌───────────┴───────────┐
+                                                                   ▼                       ▼
+                                                            [ Part: ota_0 ]         [ Part: ota_1 ]
+                                                            (Aktiv: v1.0)           (Neu: v1.1 Flash)
+                                                                                           │
+                                                          Erfolgreicher Prüfsummen-Check  ▼
+                                                            [ Automatischer Reboot in v1.1 ]
+```
+
+#### 1. Bedienung & Sicherheit:
+* **Zugang:** Im Dashboard über den Button `[⚙️ System / OTA-Update]` oder direkt über `http://<esp-ip>/update`.
+* **Authentifizierung:** Geschützt durch dieselben Zugangsdaten wie die REST-API (`HTTP_USER_KHV` / `HTTP_PASS_KHV`).
+* **Sicherer Wartungsmodus beim Flashen:**
+  1. Sobald der Upload startet, versetzt der ESP32 alle Aktoren in einen **eingefrorenen Ruhezustand**: Laufende Mischerfahrten werden sofort gestoppt (`STOP`), um Relaisflattern oder Fehlstellungen während des Flashvorgangs auszuschließen.
+  2. Die Pumpen verbleiben auf einer unkritischen Mindestdrehzahl (ca. 15 % PWM), um Rückfluss zu unterdrücken.
+  3. Watchdogs und Hintergrund-Messungen werden temporär suspendiert.
+* **Dual-Bank Rollback-Schutz:**
+  * Der ESP32 nutzt zwei getrennte Flash-Partitionen (`ota_0` und `ota_1`).
+  * Die neue Firmware wird zunächst vollständig in die inaktive Partition geschrieben und auf SHA256-Integrität geprüft.
+  * Erst bei erfolgreichem Flash wird der Boot-Pointer umgeschaltet.
+  * Sollte die neue Firmware nach dem Booten abstürzen (Crash-Loop), greift der ESP-IDF Rollback-Mechanismus und bootet automatisch wieder die bewährte Vorgängerversion.
+* **Browser-Feedback:** Live-Fortschrittsbalken (0–100 %), Erfolgsmeldung und automatischer Reconnect-Countdown nach 15 Sekunden.
+
+---
+
+### 5.8 Inbetriebnahme- & Hardware-Testmodus (Interaktiver Mapping-Assistent)
+
+Beim realen Zusammenbau im Keller entsteht ein dichter Kabelbaum: 13 identisch aussehende schwarze DS18B20-Kabel, 12 Relais-Adern, 4 PWM- und 4 VDMA-Feedback-Leitungen. **Die Verkabelung wird in der Praxis nie auf Anhieb der Soll-Pinbelegung entsprechen.**
+
+Um mühsames Suchen mit dem Multimeter oder ständiges Umschreiben des Quellcodes zu vermeiden, besitzt der ESP32-C6 einen integrierten **Inbetriebnahme-Assistenten** (`http://<esp-ip>/setup` oder Button `[🛠️ Inbetriebnahme]`):
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│  🛠️ HARDWARE-INBETRIEBNAHME & MAPPING-ASSISTENT                             │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  1. 1-WIRE TEMPERATURSENSOR-ZUORDNUNG ("FINGER-TEST")                        │
+│  Bus 1 (Vorlauf)  │ ID: 28-8B-3C-9A-04-00-00-51 │ 31.4 °C  [+6.2 K! 🔥]      │
+│                   │ └─► Zuweisen an: [ HK 1: Vorlauf (EG 5)       ▼ ] [OK]   │
+│  Bus 2 (Rücklauf) │ ID: 28-AA-12-05-02-00-00-A9 │ 18.1 °C  (ruhig)          │
+│                   │ └─► Zuweisen an: [ HK 4: Rücklauf (EG 4)      ▼ ] [OK]   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  2. RELAIS- & MISCHER-KLICKTEST (Hardware-Selbsttest)                        │
+│  [Relais 1: Mischer 1 AUF] [Klick 1s] │ [Relais 2: Mischer 1 ZU] [Klick 1s] │
+│  Drehrichtung invertieren? [ ] HK 1   │ [x] HK 2  │ [ ] HK 3   │ [ ] HK 4    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│  3. PUMPEN-PWM & VDMA-FEEDBACK-TEST                                          │
+│  Pumpe 1: [───●──────────] 40 % PWM ──► Feedback D0: 75.1 Hz · 14.8 W (OK)  │
+│  Pumpe 2: [────────●─────] 65 % PWM ──► Feedback D1: 74.9 Hz · 21.0 W (OK)  │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 1. DS18B20 „Finger-Test / Kältespray-Erkennung“ (Sensor-Mapping):
+* **Problem:** Alle DS18B20 besitzen fest eingebrannte, kryptische 64-Bit-Adressen (z. B. `28-8B-3C-9A-...`). Beim Anschließen an das Rohr weiß niemand, welche Adresse zu welchem Heizkreis gehört.
+* **Lösung:**
+  1. Der ESP32 scannt kontinuierlich alle 3 Stränge (D9 Vorlauf, D10 Rücklauf, D8 Schaltbox) und zeigt alle erkannten IDs im Sekundentakt live im Browser an.
+  2. **Auto-Detektion bei Erwärmung:** Der Installateur fasst nacheinander einen Fühler am Rohr mit der warmen Hand an (oder nutzt Kältespray).
+  3. Die Web-UI erkennt den plötzlichen Temperaturanstieg ($dT > +2{,}0\,\text{K}$ in 5 Sekunden) und **hebt die betroffene Sensor-ID sofort farblich blinkend hervor**.
+  4. Per Dropdown-Menü weist der Installateur dem Sensor die gewünschte Rolle zu (z. B. `HK 1 Vorlauf`) und klickt auf `[Speichern]`.
+* **Persistente Speicherung im Flash (NVS / LittleFS):**
+  Die Zuordnungstabelle (`ROM-ID ↔ Rolle`) wird als `mapping.json` im internen Flash-Dateisystem gespeichert. Ein Fühlertausch oder Umklemmen erfordert **keine Code-Änderung**!
+
+#### 2. Relais-Klicktest & Mischer-Richtungsumkehr:
+* Jedes der 12 Relais kann per Tastendruck für genau 1 Sekunde testweise angezogen werden.
+* Der Installateur steht vor dem Verteiler und prüft akustisch und optisch:
+  * *"Klickt Relais 1 und fährt Mischer 1 nach links auf AUF?"*
+  * *"Schaltet Relais 9 die 230V-Versorgung von Pumpe 1 ein?"*
+* **Software-Invertierung:** Wurden AUF- und ZU-Adern am Stellantrieb vertauscht, muss nicht mühsam umgeklemmt werden: Eine Checkbox `[x] Mischer-Richtung invertieren` im Einrichtungsmenü tauscht die Steuerbefehle softwareseitig um.
+
+#### 3. Pumpen-PWM & VDMA-Feedback-Test:
+* Über Schieberegler kann jede Pumpe einzeln von 0 bis 100 % PWM ausgesteuert werden.
+* Direkt daneben zeigt das Web-UI die am jeweiligen Feedback-Pin (D0, D1, D2, D21) gemessene Frequenz und Leistung an.
+* So lässt sich in 30 Sekunden verifizieren, ob PWM-Ausgang und Optokoppler-Rückmeldung der richtigen Pumpe zugeordnet sind.
+
+#### 4. Konfigurations-Backup:
+* Die gesamte ermittelte Hardware-Konfiguration (Sensor-IDs, Relais-Zuordnungen, Invertierungs-Flags) kann per Knopfdruck als `config_backup.json` auf den PC heruntergeladen und bei Bedarf wiederhergestellt werden.
 
 ---
 
