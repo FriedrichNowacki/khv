@@ -106,15 +106,15 @@ Die 4 Hocheffizienzpumpen werden über eine Kombination aus 230V-Netzfreigabe, P
 
 2. **VDMA-Rückmeldesignal (GPIO0, GPIO1, GPIO2, GPIO21 via Optokoppler):**
    * Die Pumpen senden ein **75-Hz-Rückmeldesignal** (VDMA-Standard) zurück an den ESP32.
-   * Das Tastverhältnis (Duty Cycle) übermittelt den aktuellen Betriebszustand sowie die **aktuelle elektrische Wirkleistung / Leistungsaufnahme ($P_{\text{el}}$ in Watt)**:
+   * Das Tastverhältnis (Duty Cycle) übermittelt den aktuellen Betriebszustand sowie die **aktuelle elektrische Wirkleistung / Leistungsaufnahme** ($P_{\text{el}}$ in Watt):
      * `0–5 %`: Signalunterbrechung / Fehler / Kein Signal
      * `5–70 %`: Aktuelle Leistungsaufnahme (linear abgebildet auf z. B. 0–45 W)
      * `75–80 %`: Standby-Zustand (0 W)
      * `80–90 %`: Warnung / Überlastbetrieb
      * `90–100 %`: Störung / Blockade (Rotor blockiert)
 
-3. **Durchflussschätzung via Kennlinienfeld ($Q_{\text{est}}$):**
-   * Anhand der physikalischen Pumpenkennlinie ist der resultierende Volumenstrom $Q$ direkt abhängig von der **angeforderten Drehzahl ($PWM_{\text{soll}}$)** und der **tatsächlich aufgenommenen Leistung ($P_{\text{el}}$)**:
+3. **Durchflussschätzung via Kennlinienfeld** ($Q_{\text{est}}$):
+   * Anhand der physikalischen Pumpenkennlinie ist der resultierende Volumenstrom $Q$ direkt abhängig von der **angeforderten Drehzahl** ($PWM_{\text{soll}}$) und der **tatsächlich aufgenommenen Leistung** ($P_{\text{el}}$):
      $$Q_{\text{est}} = f(PWM_{\text{soll}}, P_{\text{el}})$$
    * In der ESP32-C6 Firmware wird hierfür ein **2D-Kennlinienfeld (Lookup-Table mit bilinearer Interpolation)** hinterlegt.
    * Daraus errechnet der ESP32 zyklisch den geschätzten Durchfluss in Litern pro Stunde (`flow_est_lh`).
@@ -129,22 +129,22 @@ Das Zusammenspiel aus **VDMA 75-Hz-Pumpenfeedback** (elektrische Leistung $P_{\t
 
 Damit ist das System unabhängig vom 120-Sekunden-Batterieintervall der M-Bus-Zähler und liefert sekündliche Echtzeitwerte – insbesondere für **HK 1: EG 5**, wo der physikalische WMZ noch in Vorbereitung ist, sowie zur kontinuierlichen Redundanz- und Plausibilitätsprüfung für alle Kreise:
 
-1. **Eingangsgrößen je Heizkreis $i \in \{1, 2, 3, 4\}$ (1-Hz-Erfassung):**
+1. **Eingangsgrößen je Heizkreis** $i \in \{1, 2, 3, 4\}$ **(1-Hz-Erfassung):**
    * Vorlauftemperatur $T_{\text{VL}, i}$ (DS18B20 Vorlauf)
    * Rücklauftemperatur $T_{\text{RL}, i}$ (DS18B20 Rücklauf)
    * Geschätzter Volumenstrom $Q_{\text{est}, i}$ in Litern pro Stunde (aus Pumpenkennlinienfeld)
 
 2. **Berechnete Werte (vollständig äquivalent zum physischen WMZ):**
-   * **Spreizung ($\Delta T$):**
+   * **Spreizung** ($\Delta T$):
      $$\Delta T_i = T_{\text{VL}, i} - T_{\text{RL}, i} \quad [\text{K}]$$
-   * **Thermische Momentanleistung ($P_{\text{th}}$ in Watt):**
+   * **Thermische Momentanleistung** ($P_{\text{th}}$ in Watt):
      $$P_{\text{th}, i} = Q_{\text{est}, i} \cdot \Delta T_i \cdot 1{,}163\,\frac{\text{Wh}}{\text{kg}\cdot\text{K}} \quad [\text{W}]$$
-     *(Bedingung: Falls Pumpe AUS, $Q_{\text{est}} \le 0$ oder $\Delta T \le 0 \implies P_{\text{th}} = 0\,\text{W}$)*
-   * **Kumulierte Wärmemenge ($E_{\text{th}}$ / `virtual_energy_wh` in Wh bzw. kWh):**
+     (Bedingung: Falls Pumpe AUS, $Q_{\text{est}} \le 0$ oder $\Delta T \le 0 \implies P_{\text{th}} = 0\,\text{W}$)
+   * **Kumulierte Wärmemenge** ($E_{\text{th}}$ / `virtual_energy_wh` in Wh bzw. kWh):
      Der ESP32 integriert sekündlich die thermische Energie auf ($E_{\text{th}} += P_{\text{th}} \cdot \frac{1}{3600}\,\text{h}$). Dies entspricht exakt dem Zählerstand `energy_wh` eines physischen WMZ.
-   * **Kumuliertes Fördervolumen ($V$ / `virtual_vol_l` in Litern):**
+   * **Kumuliertes Fördervolumen** ($V$ / `virtual_vol_l` in Litern):
      Ebenso wird der Durchfluss sekündlich zum Gesamtvolumen aufsummiert ($V += Q_{\text{est}} \cdot \frac{1}{3600}\,\text{h}$), äquivalent zu `volume_l` des WMZ.
-   * **Momentaner Durchfluss ($Q$):** $Q_{\text{est}, i}$ in $\text{l}/\text{h}$
+   * **Momentaner Durchfluss** ($Q$): $Q_{\text{est}, i}$ in l/h
    * **Vorlauf- & Rücklauftemperatur:** $T_{\text{VL}, i}$, $T_{\text{RL}, i}$ in °C
    * **Rolle im Gesamtsystem:**
      * **HK 1 (EG 5):** Vollwertiger Arbeitszähler für Wärme und Volumen, solange noch kein physischer Zähler eingebaut ist.
@@ -185,25 +185,25 @@ Die Bilanzierung erfolgt parallel über **zwei unabhängige Quellen**:
 
 #### 1. Formeln & Berechnungsschritte:
 
-* **Spreizung des Verteilerbalkens ($\Delta T_{\text{balken}}$):**
+* **Spreizung des Verteilerbalkens** ($\Delta T_{\text{balken}}$):
   $$\Delta T_{\text{balken}} = T_{\text{balken, VL}} - T_{\text{balken, RL}} \quad [\text{K}]$$
 
-* **Gesamte thermische Heizleistung ($P_{\text{ges}}$ in Watt):**
+* **Gesamte thermische Heizleistung** ($P_{\text{ges}}$ in Watt):
   $$P_{\text{ges, VDMA}} = \sum_{i=1}^{4} P_{\text{th, VDMA}, i} \quad [\text{W}], \qquad P_{\text{ges, WMZ}} = \sum_{i=1}^{4} P_{\text{th, WMZ}, i} \quad [\text{W}]$$
 
-* **Errechneter Primärdurchfluss durch den Verteilerbalken ($Q_{\text{balken}}$ in l/h):**
+* **Errechneter Primärdurchfluss durch den Verteilerbalken** ($Q_{\text{balken}}$ in l/h):
   Da die Summe der Heizkreisleistungen der über den Balken transportierten Primärenergie entspricht ($P_{\text{balken}} = P_{\text{ges}} = Q_{\text{balken}} \cdot \Delta T_{\text{balken}} \cdot c_{\text{water}}$), lässt sich der Volumenstrom vom Kessel direkt rückrechnen:
   $$Q_{\text{balken, VDMA}} = \frac{P_{\text{ges, VDMA}}}{\Delta T_{\text{balken}} \cdot 1{,}163\,\frac{\text{Wh}}{\text{kg}\cdot\text{K}}} \quad [\text{l/h}]$$
   $$Q_{\text{balken, WMZ}} = \frac{P_{\text{ges, WMZ}}}{\Delta T_{\text{balken}} \cdot 1{,}163\,\frac{\text{Wh}}{\text{kg}\cdot\text{K}}} \quad [\text{l/h}]$$
-  *(Plausibilitätskriterium: Berechnung aktiv wenn $\Delta T_{\text{balken}} \ge 0{,}5\,\text{K}$ und $P_{\text{ges}} > 0$; sonst $Q_{\text{balken}} = 0\,\text{l/h}$)*
+  (Plausibilitätskriterium: Berechnung aktiv wenn $\Delta T_{\text{balken}} \ge 0{,}5\,\text{K}$ und $P_{\text{ges}} > 0$; sonst $Q_{\text{balken}} = 0\,\text{l/h}$)
 
-* **Gesamt-Wärmemenge des Verteilerbalkens ($E_{\text{balken}}$ in Wh / kWh):**
+* **Gesamt-Wärmemenge des Verteilerbalkens** ($E_{\text{balken}}$ in Wh / kWh):
   * **Aus VDMA (kontinuierlich sekündlich im RAM/Flash integriert):**
     $$E_{\text{balken, VDMA}} += P_{\text{ges, VDMA}} \cdot \frac{1}{3600}\,\text{h} \quad [\text{Wh}]$$
   * **Aus WMZ (Summe der Hardware-Zählerstände):**
     $$E_{\text{ges, WMZ}} = \sum_{i=1}^{4} E_{\text{WMZ}, i} \quad [\text{Wh}]$$
 
-* **Kumuliertes Primär-Wasservolumen ($V_{\text{balken}}$ in Litern):**
+* **Kumuliertes Primär-Wasservolumen** ($V_{\text{balken}}$ in Litern):
   * **Aus VDMA:**
     $$V_{\text{balken, VDMA}} += Q_{\text{balken, VDMA}} \cdot \frac{1}{3600}\,\text{h} \quad [\text{l}]$$
   * **Aus WMZ:**
@@ -212,7 +212,7 @@ Die Bilanzierung erfolgt parallel über **zwei unabhängige Quellen**:
 #### 2. Praktischer Mehrwert für Betrieb & Hydraulik:
 1. **Kein teurer Primär-WMZ erforderlich:** Der Durchfluss und Wärmeverbrauch der Heizzentrale (Pufferspeicher/Kessel) wird exakt bestimmt, ohne Rohrleitungen auftrennen oder teure DN32/DN40-Großzähler installieren zu müssen.
 2. **Redundanz & Sensor-Plausibilisierung:** Weichen VDMA- und WMZ-Werte am Balken dauerhaft voneinander ab, erkennt der ESP32 sofort defekte Fühler, klemmende Ventile oder verschmutzte Zähler.
-3. **Mischer-Bypassgrad (Primär-Beimischverhältnis $\eta_{\text{primär}}$):**
+3. **Mischer-Bypassgrad** (Primär-Beimischverhältnis $\eta_{\text{primär}}$):
    In den Heizkreisen wälzen die 4 Pumpen in Summe $\sum Q_{\text{kreis}, i}$ um. Da die 3-Wege-Mischer kaltes Kreisrücklaufwasser beimischen, ist der Primärdurchfluss $Q_{\text{balken}}$ kleiner als die Summe der Sekundärdurchflüsse:
    $$\eta_{\text{primär}} = \frac{Q_{\text{balken}}}{\sum_{i=1}^{4} Q_{\text{kreis}, i}}$$
    * $\eta \approx 1{,}0$ (100 %): Mischer sind voll geöffnet; Primärwasser strömt ungemischt in die Heizkreise.
@@ -221,28 +221,28 @@ Die Bilanzierung erfolgt parallel über **zwei unabhängige Quellen**:
 #### 3. Heizkreis-spezifische Flussanteile & Beimischungsgrad (Richmannsche Mischungsregel):
 
 An jedem 3-Wege-Mischer treffen zwei Wasserströme zusammen und bilden den gemeinsamen Vorlauf des Heizkreises:
-1. **Heißer Primärzulauf vom Verteilerbalken ($Q_{\text{primär}, i}$)** mit der Temperatur $T_{\text{balken, VL}}$
-2. **Kühler Bypass-Rücklauf aus dem eigenen Kreis ($Q_{\text{bypass}, i}$)** mit der Temperatur $T_{\text{RL}, i}$
-3. **Gemischter Vorlauf in die Heizflächen ($Q_{\text{kreis}, i}$)** mit der Temperatur $T_{\text{VL}, i}$
+1. **Heißer Primärzulauf vom Verteilerbalken** ($Q_{\text{primär}, i}$) mit der Temperatur $T_{\text{balken, VL}}$
+2. **Kühler Bypass-Rücklauf aus dem eigenen Kreis** ($Q_{\text{bypass}, i}$) mit der Temperatur $T_{\text{RL}, i}$
+3. **Gemischter Vorlauf in die Heizflächen** ($Q_{\text{kreis}, i}$) mit der Temperatur $T_{\text{VL}, i}$
 
 ```text
                                  T_balken_VL (z.B. 65°C)
-                                        │
-                                        ▼  Q_primär,i (Frischwasser vom Kessel)
-                                  ┌───────────┐
-      Q_bypass,i                  │  3-Wege-  │       Q_kreis,i (Pumpe)
-    (Kreis-Rücklauf) ────────────►│  Mischer  │──────────────────────────► Vorlauf Heizkreis
-    T_RL,i (z.B. 30°C)            └───────────┘                     T_VL,i (z.B. 38°C)
+                                           │
+                                           ▼ Q_primär,i (Frischwasser vom Kessel)
+                                     ┌───────────┐
+      Q_bypass,i                     │  3-Wege-  │      Q_kreis,i (Pumpe)
+(Kreis-Rücklauf) ───────────────────►│  Mischer  │──────────────────────────► Vorlauf Heizkreis
+T_RL,i (z.B. 30°C)                   └───────────┘                            T_VL,i (z.B. 38°C)
 ```
 
 Aus der Massenerhaltung ($Q_{\text{kreis}} = Q_{\text{primär}} + Q_{\text{bypass}}$) und der thermodynamischen Wärmebilanz ($Q_{\text{kreis}} \cdot T_{\text{VL}} = Q_{\text{primär}} \cdot T_{\text{balken, VL}} + Q_{\text{bypass}} \cdot T_{\text{RL}}$) berechnet der ESP32 für jeden Heizkreis $i$ die exakten Flussanteile:
 
-* **Primäranteil $\alpha_i$ (Anteil vom Kesselbalken in %):**
+* **Primäranteil** $\alpha_i$ (Anteil vom Kesselbalken in %):
   $$\alpha_i = \frac{Q_{\text{primär}, i}}{Q_{\text{kreis}, i}} = \frac{T_{\text{VL}, i} - T_{\text{RL}, i}}{T_{\text{balken, VL}} - T_{\text{RL}, i}}$$
-  * $\alpha_i = 1{,}0$ ($100\,\%$): Mischer steht voll AUF ($T_{\text{VL}} = T_{\text{balken, VL}}$).
-  * $\alpha_i = 0{,}0$ ($0\,\%$): Mischer steht voll ZU ($T_{\text{VL}} = T_{\text{RL}}$), reiner Kreis-Umlauf.
+  * $\alpha_i = 1{,}0$ (100 %): Mischer steht voll AUF ($T_{\text{VL}} = T_{\text{balken, VL}}$).
+  * $\alpha_i = 0{,}0$ (0 %): Mischer steht voll ZU ($T_{\text{VL}} = T_{\text{RL}}$), reiner Kreis-Umlauf.
 
-* **Bypass-Beimischanteil $\beta_i$ (Rücklauf-Beimischung in %):**
+* **Bypass-Beimischanteil** $\beta_i$ (Rücklauf-Beimischung in %):
   $$\beta_i = \frac{Q_{\text{bypass}, i}}{Q_{\text{kreis}, i}} = 1 - \alpha_i = \frac{T_{\text{balken, VL}} - T_{\text{VL}, i}}{T_{\text{balken, VL}} - T_{\text{RL}, i}}$$
 
 * **Absolute Volumenströme (in l/h):**
@@ -252,7 +252,7 @@ Aus der Massenerhaltung ($Q_{\text{kreis}} = Q_{\text{primär}} + Q_{\text{bypas
 
 * **Nutzen in der Praxis:**
   1. **Virtuelle Mischerposition in %:** Da die Stellantriebe keine Stellungsrückmeldung besitzen, liefert $\alpha_i \cdot 100$ in Echtzeit den wahren physikalischen Öffnungsgrad des Mischers!
-  2. **Fehler- und Klemmerkennung:** Fährt der Mischer softwareseitig auf ZU, aber $\alpha_i$ verharrt bei $25\,\%$, meldet der ESP32 eine mechanische Leckage oder Klemmen des Ventilsitzes.
+  2. **Fehler- und Klemmerkennung:** Fährt der Mischer softwareseitig auf ZU, aber $\alpha_i$ verharrt bei 25 %, meldet der ESP32 eine mechanische Leckage oder Klemmen des Ventilsitzes.
   3. **Hydraulische Kreuzprüfung:** Die Summe aller Einzel-Primärflüsse entspricht exakt dem Gesamt-Balkendurchfluss: $\sum_{i=1}^{4} Q_{\text{primär}, i} = Q_{\text{balken}}$.
 
 ---
@@ -577,23 +577,23 @@ Alle 120s: WMZ Tauchhülse (T_WMZ) ┘                               ▼
    * Der Regler nutzt sekündlich die fusionierte Temperatur: $T_{\text{eff}} = T_{\text{DS18B20}} + \Delta_{\text{offset}}$.
    * **Reiner DS18B20-Betrieb (z. B. HK 1 ohne WMZ):** Liegt kein WMZ vor, wird $\Delta_{\text{offset}} = 0$ gesetzt und der Regler-Sollwert sicherheitshalber auf **max. 41–42 °C** begrenzt (entspricht ca. 44–45 °C Kernwasser).
 
-2. **Gradienten-Bremse (D-Anteil / Trend-Erkennung $dT/dt$):**
-   * Steigt die Vorlauftemperatur schneller als mit **$+0{,}5\,\text{K} \text{ pro } 10\,\text{Sekunden}$**, werden alle weiteren AUF-Impulse **sofort verriegelt**.
+2. **Gradienten-Bremse** (D-Anteil / Trend-Erkennung $dT/dt$):
+   * Steigt die Vorlauftemperatur schneller als mit **+0,5 K pro 10 Sekunden**, werden alle weiteren AUF-Impulse **sofort verriegelt**.
    * Der Regler wartet ab, bis die Hitzewelle am Sensor vollständig durchgeschlagen ist, bevor erneut geregelt wird.
 
 3. **Erzwungene Totzeit-Pause (45 bis 60 Sekunden Einschwingzeit):**
    * Nach jedem Stellimpuls (z. B. 2 Sekunden AUF) hält der Regler **mindestens 45–60 Sekunden die Füße still**, damit die Rohrwand das thermische Gleichgewicht erreicht.
    * Es gibt **keinen I-Anteil**, der weglaufen könnte. Stellentscheidungen fallen ausschließlich im thermisch eingeschwungenen Zustand ($\frac{dT}{dt} \approx 0$).
 
-4. **Asymmetrischer Dreipunkt-Schrittregler (Sollwert: $44{,}0\,^\circ\text{C}$):**
+4. **Asymmetrischer Dreipunkt-Schrittregler** (Sollwert: **44,0 °C**):
 
 | Vorlauftemperatur ($T_{\text{eff}}$) | Mischer-Aktion | Impuls / Pause | Regelverhalten |
 |---|---|---|---|
-| **$< 42{,}0\,^\circ\text{C}$** | **AUF**-Impuls | $t = (44 - T) \cdot 0{,}8\,\text{s}$ (max. 3 s) / **45–60 s Pause** | Sanftes Öffnen ohne Überschwingen |
-| **$42{,}0 \dots 45{,}0\,^\circ\text{C}$** | **STOP (Totzone)** | Relais stromlos | **Kein Verschleiß, maximale Wärme gehalten** |
-| **$45{,}1 \dots 47{,}9\,^\circ\text{C}$** | **ZU**-Impuls | $t = (T - 44) \cdot 1{,}5\,\text{s}$ (3–5 s) / **15 s Pause** | **Asymmetrisch:** Bremst 3x schneller ab als er öffnet |
-| **$48{,}0 \dots 49{,}9\,^\circ\text{C}$** | **Dauerhaft ZU** | Mischer fährt kontinuierlich ZU | Sofortiger Schutz vor 50 °C |
-| **$\ge 50{,}0\,^\circ\text{C}$** | **Stufenweiser Not-Stopp** | 1. Mischer voll ZU + **Pumpe auf Minimum (10–15%)** gegen Rückfluss<br>2. Erst bei anhaltendem Anstieg: **Relais AUS** + Alarm | Verhindert Rückwärtssaugen & schützt Estrich |
+| **< 42,0 °C** | **AUF**-Impuls | $t = (44 - T) \cdot 0{,}8\,\text{s}$ (max. 3 s) / **45–60 s Pause** | Sanftes Öffnen ohne Überschwingen |
+| **42,0 … 45,0 °C** | **STOP (Totzone)** | Relais stromlos | **Kein Verschleiß, maximale Wärme gehalten** |
+| **45,1 … 47,9 °C** | **ZU**-Impuls | $t = (T - 44) \cdot 1{,}5\,\text{s}$ (3–5 s) / **15 s Pause** | **Asymmetrisch:** Bremst 3x schneller ab als er öffnet |
+| **48,0 … 49,9 °C** | **Dauerhaft ZU** | Mischer fährt kontinuierlich ZU | Sofortiger Schutz vor 50 °C |
+| **≥ 50,0 °C** | **Stufenweiser Not-Stopp** | 1. Mischer voll ZU + **Pumpe auf Minimum (10–15%)** gegen Rückfluss<br>2. Erst bei anhaltendem Anstieg: **Relais AUS** + Alarm | Verhindert Rückwärtssaugen & schützt Estrich |
 
 #### Mechanische Montageempfehlung:
 * Zwischen Rohr und DS18B20-Sensor unbedingt **Wärmeleitpaste** anbringen.
@@ -648,7 +648,7 @@ Prüfung auf Rückfluss (alle 5 Sekunden):
 ```
 
 * **Kein Fehlalarm im Sommerbetrieb:** Im Sommer oder bei komplett abgeschalteter Heizung kühlt das stehende Wasser im Vorlaufrohr oft schneller ab als im wärmeren Rücklauf (oder umgekehrt durch Raumtemperaturdifferenzen). Daher ist die Rückflusserkennung **nur im aktiven Winter-Heizbetrieb** aktiv und **nur dann, wenn mindestens eine Nachbarpumpe aktiv Druck erzeugt**.
-* **Sicherheits-Totzone ($3{,}0\,\text{K}$):** Geringe Temperaturdifferenzen ($< 2{,}0\,\text{K}$) werden toleriert, da sie bei Stillstand durch sensorische Toleranzen oder Kellerluft entstehen können. Erst ab einer stabilen Inversion von $\ge 3{,}0\,\text{K}$ über mehr als 60 Sekunden schlägt die Erkennung an.
+* **Sicherheits-Totzone (3,0 K):** Geringe Temperaturdifferenzen (< 2,0 K) werden toleriert, da sie bei Stillstand durch sensorische Toleranzen oder Kellerluft entstehen können. Erst ab einer stabilen Inversion von $\ge 3{,}0\,\text{K}$ über mehr als 60 Sekunden schlägt die Erkennung an.
 * **WMZ-Plausibilisierung:** Wärmemengenzähler (M-Bus) erkennen die Fließrichtung. Meldet der WMZ einen negativen Durchfluss, unplausible Nullwerte trotz Temperaturgefälle oder negative Leistung ($T_{\text{bwd}} > T_{\text{fwd}}$), gilt der Rückfluss als messtechnisch verifiziert.
 
 #### 3. Autonome Schutzmaßnahmen des ESP32:
@@ -817,12 +817,12 @@ Um eine Datenflut in InfluxDB zuverlässig zu unterbinden (z. B. bei Sensorrausc
 
 1. **Mindestabstand eingehalten (Rate Limit / `min_interval`):**
    * Seit dem letzten Senden dieses spezifischen Messwerts muss die konfigurierte Mindestzeit vergangen sein:
-     $$\Delta t \ge \Delta t_{\text{min}}$$
+     $\Delta t \ge \Delta t_{\text{min}}$
    * Ist diese Zeit noch nicht verstrichen ($\Delta t < \Delta t_{\text{min}}$), wird der Wert verworfen (nicht gesendet), selbst wenn der Schwellwert überschritten wäre.
 2. **Wertänderung ODER Maximalzeit (Heartbeat / `max_interval`):**
    * Ist der Mindestabstand erfüllt, wird gesendet, sobald mindestens eine Bedingung zutrifft:
-     * **Schwellwert überschritten:** $$|\text{Wert}_{\text{aktuell}} - \text{Wert}_{\text{gesendet}}| \ge \text{Threshold}$$
-     * **Maximalzeit abgelaufen:** $$\Delta t \ge \Delta t_{\text{max}}$$ (standardmäßig 600 s / 10 min als Lebenszeichen).
+     * **Schwellwert überschritten:** $|\text{Wert}_{\text{aktuell}} - \text{Wert}_{\text{gesendet}}| \ge \text{Threshold}$
+     * **Maximalzeit abgelaufen:** $\Delta t \ge \Delta t_{\text{max}}$ (standardmäßig 600 s / 10 min als Lebenszeichen).
 
 ```text
 Senden an InfluxDB? = (Δt >= min_interval) AND (|ΔWert| >= Threshold OR Δt >= max_interval)
@@ -885,9 +885,9 @@ Leistung P
 ```
 
 Betroffen sind alle **zeitintegrierten Raten- und Flussgrößen**:
-1. **Thermische Heizleistung ($P_{\text{th}} \to E_{\text{th}}$):** Kumulierte Wärmemenge in Wattstunden (Wh).
-2. **Elektrische Pumpenleistung ($P_{\text{el}} \to E_{\text{el}}$):** Kumulierter Pumpenstrom in Wattstunden (Wh).
-3. **Durchfluss der Pumpe ($Q \to V$):** Kumuliertes umgewälztes Wasservolumen in Litern (l).
+1. **Thermische Heizleistung** ($P_{\text{th}} \to E_{\text{th}}$): Kumulierte Wärmemenge in Wattstunden (Wh).
+2. **Elektrische Pumpenleistung** ($P_{\text{el}} \to E_{\text{el}}$): Kumulierter Pumpenstrom in Wattstunden (Wh).
+3. **Durchfluss der Pumpe** ($Q \to V$): Kumuliertes umgewälztes Wasservolumen in Litern (l).
 
 #### Die Lösung: Das 2-Säulen-Architekturprinzip des ESP32-C6
 
@@ -909,7 +909,7 @@ Sekündliche Erfassung (1 Hz im FreeRTOS-Task):
                   ──► Ermöglicht simple, 100% fehlerfreie Differenzabfragen (Tag/Monat/Jahr)!
 ```
 
-#### Säule 1: Zeitgewichteter Mittelwert ($\bar{P}_{\text{el}}, \bar{P}_{\text{th}}, \bar{Q}$)
+#### Säule 1: Zeitgewichteter Mittelwert (Leistung & Durchfluss)
 Anstelle des letzten Augenblickswerts überträgt der ESP32 für `power_w`, `heat_power_w` und `flow_est_lh` den **zeitgewichteten Durchschnitt** über das vergangene Sendeintervall $\Delta t$:
 $$\bar{P}_{[t_0, t_1]} = \frac{1}{\Delta t} \sum_{i=1}^{N} P(t_i) \cdot \Delta t_i, \quad \bar{Q}_{[t_0, t_1]} = \frac{1}{\Delta t} \sum_{i=1}^{N} Q(t_i) \cdot \Delta t_i$$
 * **Mathematischer Vorteil:** Wenn Grafana oder InfluxDB nun das Integral über diesen Zeitblock bildet ($\bar{P} \cdot \Delta t$ bzw. $\bar{Q} \cdot \Delta t$), entspricht das Ergebnis **auf die Wattsekunde bzw. den Milliliter genau der realen physikalischen Arbeit**, völlig unabhängig davon, wie oft die Leistung im Intervall gesprungen ist.
